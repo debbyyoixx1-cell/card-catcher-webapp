@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Card Catcher Mini App</title>
+<meta name="description" content="Browse the card shop, view shared cards and manage your own collection." />
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root { color-scheme: dark; --bg:#0b0f1a; --panel:#111827; --line:#1f2937; --txt:#e5e7eb; --accent:#fbbf24; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif; padding:12px 12px 84px; }
+  header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+  h1 { font-size:18px; margin:0; }
+  .muted { font-size:12px; opacity:.65; }
+  .msg { background:var(--line); padding:10px 12px; border-radius:10px; margin-bottom:12px; font-size:13px; }
+  .grid { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; overflow:hidden; display:flex; flex-direction:column; }
+  .card img { width:100%; aspect-ratio:3/4; object-fit:cover; background:var(--bg); display:block; }
+  .body { padding:8px; display:flex; flex-direction:column; gap:5px; }
+  .name { font-weight:600; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rank { font-size:10px; font-weight:700; text-transform:uppercase; }
+  .sub { font-size:10px; opacity:.65; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  a.owner { color:#60a5fa; text-decoration:none; font-size:10px; }
+  button { background:linear-gradient(90deg,#fbbf24,#f59e0b); color:#0b0f1a; border:none; border-radius:10px; padding:8px 6px; font-weight:700; font-size:12px; cursor:pointer; }
+  button.ghost { background:#1f2937; color:var(--txt); }
+  button.danger { background:#dc2626; color:#fff; }
+  button:disabled { opacity:.55; }
+  nav { position:fixed; left:0; right:0; bottom:0; display:grid; grid-template-columns:repeat(3,1fr); background:#0f172a; border-top:1px solid var(--line); }
+  nav button { background:none; color:var(--txt); border-radius:0; padding:12px 4px; font-weight:600; font-size:13px; opacity:.6; }
+  nav button.active { opacity:1; color:var(--accent); }
+  .profile { display:flex; gap:12px; align-items:center; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:12px; margin-bottom:12px; }
+  .avatar { width:56px; height:56px; border-radius:50%; object-fit:cover; background:var(--line); }
+  .state { text-align:center; padding:40px; opacity:.6; }
+  .sheet { position:fixed; inset:0; background:rgba(0,0,0,.7); display:flex; align-items:flex-end; z-index:20; }
+  .sheet .inner { background:var(--panel); width:100%; border-radius:18px 18px 0 0; padding:16px; display:flex; flex-direction:column; gap:8px; max-height:88vh; overflow:auto; }
+  .sheet img { width:150px; align-self:center; border-radius:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">🛒 Card Shop</h1>
+  <div class="muted" id="count"></div>
+</header>
+<div id="msg"></div>
+<div id="root" class="state">Loading…</div>
+<div id="sheet"></div>
+<nav>
+  <button data-tab="shop" class="active">🛒 Shop</button>
+  <button data-tab="view">👀 View Card</button>
+  <button data-tab="profile">👤 My Profile</button>
+</nav>
+<script>
+(function(){
+  // Backend base URL (Lovable-hosted API). Change only if the backend moves.
+  var API = "https://card-catcher-bot.lovable.app";
+  var RANK_COLOR = {mythic_king:"#ff2d55",mythic_gold:"#ffcc00",legend:"#a259ff",red:"#ef4444",orange:"#f97316",yellow:"#eab308",green:"#10b981",blue:"#3b82f6",purple:"#8b5cf6",brown:"#b45309",black:"#94a3b8"};
+  var tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) { try { tg.ready(); tg.expand(); tg.setHeaderColor("#0b0f1a"); tg.setBackgroundColor("#0b0f1a"); } catch(e){} }
+  var initData = (tg && tg.initData) || "";
+  var root = document.getElementById("root"), msgEl = document.getElementById("msg"),
+      countEl = document.getElementById("count"), titleEl = document.getElementById("title"),
+      sheetEl = document.getElementById("sheet");
+  var tab = "shop", cache = {};
+
+  function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
+  function setMsg(t){ msgEl.innerHTML = t ? '<div class="msg">'+esc(t)+'</div>' : ''; }
+  function img(u){ return u ? (u.charAt(0)==="/" ? API+u : u) : null; }
+  function priceLine(p){ if(!p) return ""; return '<div class="sub">💎 '+p.stars+' ⭐ · 🪙 '+(p.gram||0).toFixed(4)+' · 💵 $'+(p.usd||0).toFixed(2)+'</div>'; }
+
+  function api(action, body){
+    if (!body) {
+      return fetch(API+"/api/public/webapp/api?action="+action).then(function(r){ return r.json(); });
+    }
+    body.action = action; body.initData = initData;
+    return fetch(API+"/api/public/webapp/api", {
+      method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)
+    }).then(function(r){ return r.json().then(function(d){ if(!r.ok) throw new Error(d.error||"Request failed"); return d; }); });
+  }
+
+  function cardTile(o){
+    var color = RANK_COLOR[o.rank] || "#94a3b8";
+    return '<div class="card">'
+      + (o.image ? '<img loading="lazy" src="'+esc(o.image)+'" alt="'+esc(o.name)+'"/>' : '<div style="width:100%;aspect-ratio:3/4;background:#0b0f1a"></div>')
+      + '<div class="body">'
+      + '<div class="name">'+esc(o.name)+'</div>'
+      + '<div class="rank" style="color:'+color+'">'+esc(o.rankLabel)+'</div>'
+      + (o.sub||"")
+      + (o.action||"")
+      + '</div></div>';
+  }
+
+  function renderShop(items){
+    titleEl.textContent = "🛒 Card Shop"; countEl.textContent = items.length + " listed";
+    if(!items.length){ root.className="state"; root.textContent="No cards for sale."; return; }
+    root.className="grid";
+    root.innerHTML = items.map(function(it){
+      return cardTile({
+        name: it.name, rank: it.rank, rankLabel: it.rank_emoji+" "+it.rank_label, image: img(it.image_url),
+        sub: '<div class="sub">#'+esc(it.number)+'</div><a class="owner" href="'+esc(it.seller.link)+'" target="_blank" rel="noopener">by '+esc(it.seller.name)+'</a>'+priceLine(it.price),
+        action: '<button data-buy="'+esc(it.id)+'">Pay '+it.price_stars+' ⭐</button>'
+      });
+    }).join("");
+    root.querySelectorAll("[data-buy]").forEach(function(b){
+      b.addEventListener("click", function(){ buy(b.getAttribute("data-buy"), b); });
+    });
+  }
+
+  function renderFeed(items){
+    titleEl.textContent = "👀 View Card"; countEl.textContent = items.length + " posted";
+    if(!items.length){ root.className="state"; root.textContent="No cards posted yet."; return; }
+    root.className="grid";
+    root.innerHTML = items.map(function(it){
+      return cardTile({
+        name: it.name, rank: it.rank, rankLabel: it.rank_emoji+" "+it.rank_label, image: img(it.image_url),
+        sub: '<div class="sub">#'+esc(it.number)+(it.anime?' · '+esc(it.anime):'')+'</div>'
+           + '<a class="owner" href="'+esc(it.owner.link)+'" target="_blank" rel="noopener">👤 '+esc(it.owner.name)+'</a>'
+           + '<div class="sub">❤️ '+it.reactions.like+'  😂 '+it.reactions.haha+'  😲 '+it.reactions.wow+'</div>'
+           + priceLine(it.price),
+        action: ''
+      });
+    }).join("");
+  }
+
+  function renderProfile(p){
+    titleEl.textContent = "👤 My Profile"; countEl.textContent = p.total_cards + " cards";
+    var u = p.user;
+    var head = '<div class="profile">'
+      + (u.photo_url ? '<img class="avatar" src="'+esc(u.photo_url)+'" alt=""/>' : '<div class="avatar"></div>')
+      + '<div><div style="font-weight:700">'+esc(u.first_name||"")+' '+esc(u.last_name||"")+'</div>'
+      + '<div class="sub">'+(u.username?'@'+esc(u.username):'no username')+'</div>'
+      + '<div class="sub">🆔 '+esc(u.id)+'</div>'
+      + '<div class="sub">⭐ '+p.stars+' stars</div></div></div>';
+    var grid = !p.cards.length
+      ? '<div class="state">No cards yet. Catch cards in a group first.</div>'
+      : '<div class="grid">' + p.cards.map(function(c,i){
+          return cardTile({
+            name: c.name, rank: c.rank, rankLabel: c.rank_emoji+" "+c.rank_label, image: img(c.image_url),
+            sub: '<div class="sub">#'+esc(c.number)+'</div>'
+               + (c.shared_id?'<div class="sub">👀 posted</div>':'')
+               + (c.listing_id?'<div class="sub">🛒 listed '+c.listing_price+' ⭐</div>':'')
+               + priceLine(c.price),
+            action: '<button class="ghost" data-open="'+i+'">Manage</button>'
+          });
+        }).join("") + '</div>';
+    root.className = ""; root.innerHTML = head + grid;
+    root.querySelectorAll("[data-open]").forEach(function(b){
+      b.addEventListener("click", function(){ openSheet(p.cards[Number(b.getAttribute("data-open"))]); });
+    });
+  }
+
+  function openSheet(c){
+    sheetEl.innerHTML = '<div class="sheet"><div class="inner">'
+      + (c.image_url?'<img src="'+esc(img(c.image_url))+'" alt=""/>':'')
+      + '<div style="font-weight:700;text-align:center">'+esc(c.name)+'</div>'
+      + '<div class="sub" style="text-align:center">'+esc(c.rank_emoji+" "+c.rank_label)+' · #'+esc(c.number)+'</div>'
+      + '<div class="sub" style="text-align:center">💎 '+c.price.stars+' ⭐ · 💵 $'+c.price.usd.toFixed(2)+'</div>'
+      + (c.shared_id?'<button class="danger" data-act="del-view">🗑 Remove from View Card</button>':'<button data-act="post-view">👀 Post to View Card</button>')
+      + (c.listing_id?'<button class="danger" data-act="del-shop">🗑 Remove from Card Shop</button>':'<button data-act="post-shop">🛒 Sell in Card Shop ('+c.price.stars+' ⭐)</button>')
+      + '<button class="ghost" data-act="close">Close</button>'
+      + '</div></div>';
+    sheetEl.querySelectorAll("[data-act]").forEach(function(b){
+      b.addEventListener("click", function(){
+        var a = b.getAttribute("data-act");
+        if (a === "close") { sheetEl.innerHTML = ""; return; }
+        b.disabled = true;
+        var call = a === "post-view" ? api("post_view",{card_id:c.card_id})
+                 : a === "post-shop" ? api("post_shop",{card_id:c.card_id})
+                 : a === "del-view"  ? api("delete_post",{kind:"view", id:c.shared_id})
+                 : api("delete_post",{kind:"shop", id:c.listing_id});
+        call.then(function(){ sheetEl.innerHTML=""; setMsg("✅ Done."); load("profile", true); })
+            .catch(function(e){ setMsg(e.message); b.disabled=false; });
+      });
+    });
+  }
+
+  function buy(id, btn){
+    if (!initData) { setMsg("Open this page from Telegram to pay."); return; }
+    btn.disabled = true; btn.textContent = "…"; setMsg("");
+    fetch(API+"/api/public/telegram/shop-invoice", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ listing_id:id, initData: initData })
+    }).then(function(r){ return r.json().then(function(d){ return {ok:r.ok,d:d}; }); })
+     .then(function(x){
+       if (!x.ok || !x.d.link) { setMsg(x.d.error||"Failed to create invoice"); btn.disabled=false; return; }
+       tg.openInvoice(x.d.link, function(status){
+         if (status === "paid") { setMsg("✅ Purchase complete — check the bot chat."); load("shop", true); }
+         else if (status === "failed") { setMsg("❌ Payment failed."); btn.disabled=false; }
+         else { setMsg("Payment cancelled."); btn.disabled=false; }
+       });
+     })
+     .catch(function(e){ setMsg(e.message||"Network error"); btn.disabled=false; });
+  }
+
+  function load(which, force){
+    tab = which; setMsg("");
+    document.querySelectorAll("nav button").forEach(function(b){ b.classList.toggle("active", b.getAttribute("data-tab")===which); });
+    if (!force && cache[which]) { paint(which, cache[which]); return; }
+    root.className = "state"; root.textContent = "Loading…"; countEl.textContent = "";
+    var p = which === "profile"
+      ? (initData ? api("profile", {}) : Promise.reject(new Error("Open this Mini App from the Telegram bot to see your profile.")))
+      : api(which === "shop" ? "shop" : "feed");
+    p.then(function(d){ if (d.error) throw new Error(d.error); cache[which]=d; paint(which,d); })
+     .catch(function(e){ root.className="state"; root.textContent=""; setMsg(e.message||"Failed to load"); });
+  }
+
+  function paint(which, d){
+    if (which === "shop") renderShop(d.items||[]);
+    else if (which === "view") renderFeed(d.items||[]);
+    else renderProfile(d);
+  }
+
+  document.querySelectorAll("nav button").forEach(function(b){
+    b.addEventListener("click", function(){ load(b.getAttribute("data-tab")); });
+  });
+  load("shop");
+})();
+</script>
+</body>
+</html>
