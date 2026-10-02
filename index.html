@@ -5,10 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Card Catcher Mini App</title>
 <meta name="description" content="Browse the card shop, view shared cards and manage your own collection." />
+<meta name="referrer" content="no-referrer" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://card-catcher-bot.lovable.app https://t.me https://*.telegram.org; connect-src https://card-catcher-bot.lovable.app; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org" />
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root { color-scheme: dark; --bg:#0b0f1a; --panel:#111827; --line:#1f2937; --txt:#e5e7eb; --accent:#fbbf24; }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
   body { margin:0; background:var(--bg); color:var(--txt); font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif; padding:12px 12px 84px; }
   header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
   h1 { font-size:18px; margin:0; }
@@ -16,7 +18,7 @@
   .msg { background:var(--line); padding:10px 12px; border-radius:10px; margin-bottom:12px; font-size:13px; }
   .grid { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; overflow:hidden; display:flex; flex-direction:column; }
-  .card img { width:100%; aspect-ratio:3/4; object-fit:cover; background:var(--bg); display:block; }
+  .card-image { width:100%; aspect-ratio:3/4; background-color:var(--bg); background-position:center; background-repeat:no-repeat; background-size:cover; display:block; pointer-events:none; }
   .body { padding:8px; display:flex; flex-direction:column; gap:5px; }
   .name { font-weight:600; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .rank { font-size:10px; font-weight:700; text-transform:uppercase; }
@@ -30,11 +32,11 @@
   nav button { background:none; color:var(--txt); border-radius:0; padding:12px 4px; font-weight:600; font-size:13px; opacity:.6; }
   nav button.active { opacity:1; color:var(--accent); }
   .profile { display:flex; gap:12px; align-items:center; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:12px; margin-bottom:12px; }
-  .avatar { width:56px; height:56px; border-radius:50%; object-fit:cover; background:var(--line); }
+  .avatar { width:56px; height:56px; flex:0 0 56px; border-radius:50%; background-color:var(--line); background-position:center; background-repeat:no-repeat; background-size:cover; pointer-events:none; }
   .state { text-align:center; padding:40px; opacity:.6; }
   .sheet { position:fixed; inset:0; background:rgba(0,0,0,.7); display:flex; align-items:flex-end; z-index:20; }
   .sheet .inner { background:var(--panel); width:100%; border-radius:18px 18px 0 0; padding:16px; display:flex; flex-direction:column; gap:8px; max-height:88vh; overflow:auto; }
-  .sheet img { width:150px; align-self:center; border-radius:12px; }
+  .sheet-image { width:150px; aspect-ratio:3/4; align-self:center; border-radius:12px; background-color:var(--bg); background-position:center; background-repeat:no-repeat; background-size:cover; pointer-events:none; }
 </style>
 </head>
 <body>
@@ -66,12 +68,11 @@
   function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
   function setMsg(t){ msgEl.innerHTML = t ? '<div class="msg">'+esc(t)+'</div>' : ''; }
   function img(u){ return u ? (u.charAt(0)==="/" ? API+u : u) : null; }
+  function bg(u){ return u ? ' style="background-image:url(&quot;'+esc(u)+'&quot;)"' : ''; }
   function priceLine(p){ if(!p) return ""; return '<div class="sub">💎 '+p.stars+' ⭐ · 🪙 '+(p.gram||0).toFixed(4)+' · 💵 $'+(p.usd||0).toFixed(2)+'</div>'; }
 
   function api(action, body){
-    if (!body) {
-      return fetch(API+"/api/public/webapp/api?action="+action).then(function(r){ return r.json(); });
-    }
+    body = body || {};
     body.action = action; body.initData = initData;
     return fetch(API+"/api/public/webapp/api", {
       method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)
@@ -81,7 +82,7 @@
   function cardTile(o){
     var color = RANK_COLOR[o.rank] || "#94a3b8";
     return '<div class="card">'
-      + (o.image ? '<img loading="lazy" src="'+esc(o.image)+'" alt="'+esc(o.name)+'"/>' : '<div style="width:100%;aspect-ratio:3/4;background:#0b0f1a"></div>')
+      + '<div class="card-image" role="img" aria-label="'+esc(o.name)+'"'+bg(o.image)+'></div>'
       + '<div class="body">'
       + '<div class="name">'+esc(o.name)+'</div>'
       + '<div class="rank" style="color:'+color+'">'+esc(o.rankLabel)+'</div>'
@@ -126,7 +127,7 @@
     titleEl.textContent = "👤 My Profile"; countEl.textContent = p.total_cards + " cards";
     var u = p.user;
     var head = '<div class="profile">'
-      + (u.photo_url ? '<img class="avatar" src="'+esc(u.photo_url)+'" alt=""/>' : '<div class="avatar"></div>')
+      + '<div class="avatar" role="img" aria-label="Profile photo"'+bg(u.photo_url)+'></div>'
       + '<div><div style="font-weight:700">'+esc(u.first_name||"")+' '+esc(u.last_name||"")+'</div>'
       + '<div class="sub">'+(u.username?'@'+esc(u.username):'no username')+'</div>'
       + '<div class="sub">🆔 '+esc(u.id)+'</div>'
@@ -151,7 +152,7 @@
 
   function openSheet(c){
     sheetEl.innerHTML = '<div class="sheet"><div class="inner">'
-      + (c.image_url?'<img src="'+esc(img(c.image_url))+'" alt=""/>':'')
+      + (c.image_url?'<div class="sheet-image" role="img" aria-label="'+esc(c.name)+'"'+bg(img(c.image_url))+'></div>':'')
       + '<div style="font-weight:700;text-align:center">'+esc(c.name)+'</div>'
       + '<div class="sub" style="text-align:center">'+esc(c.rank_emoji+" "+c.rank_label)+' · #'+esc(c.number)+'</div>'
       + '<div class="sub" style="text-align:center">💎 '+c.price.stars+' ⭐ · 💵 $'+c.price.usd.toFixed(2)+'</div>'
@@ -213,6 +214,17 @@
   document.querySelectorAll("nav button").forEach(function(b){
     b.addEventListener("click", function(){ load(b.getAttribute("data-tab")); });
   });
+  ["contextmenu", "dragstart", "selectstart", "copy"].forEach(function(eventName){
+    document.addEventListener(eventName, function(e){ e.preventDefault(); }, { capture:true });
+  });
+  document.addEventListener("touchstart", function(e){
+    if (e.touches && e.touches.length > 1) e.preventDefault();
+  }, { passive:false, capture:true });
+  if (!initData) {
+    setMsg("Open this Mini App from Telegram.");
+    root.className="state"; root.textContent="Protected content";
+    return;
+  }
   load("shop");
 })();
 </script>
